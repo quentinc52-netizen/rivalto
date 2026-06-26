@@ -535,7 +535,12 @@ async function handleOAuthCallback(code){
     await fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user_id:user.id})});
     // Charger les vraies activités depuis Supabase
     buildData();
+    await checkInviteLink(user.id);
     await loadRealActivities(user.id);
+    await loadRealFriends(user.id);
+    // Vider les amis fictifs si on a de vrais amis
+    if(friendIds.some(id=>id!=='t'&&id!=='s'&&id!=='j'&&id!=='m'&&id!=='l'&&id!=='k')){
+      friendIds=friendIds.filter(id=>!['t','s','j','m','l','k'].includes(id));}
     mountApp(user);
   }catch(e){
     document.getElementById('app').innerHTML=`<div class="login"><div class="ring"><span style="color:var(--magenta)">${ic('bolt',46,0,true)}</span></div><div class="brand">RIVAL<b>TO</b></div><p class="pitch" style="color:var(--magenta)">Erreur : ${e.message}</p><button class="btn-strava" onclick="renderLogin()">${ic('bolt',20,0,true)} Réessayer</button></div>`;
@@ -963,41 +968,96 @@ function closeOverlay(){if(_actMap){try{_actMap.remove();}catch(e){}_actMap=null
   const ov=document.getElementById('overlay');ov.classList.remove('on');setTimeout(()=>ov.innerHTML='',300);}
 
 /* ============================================================ INVITER */
+// ============ SYSTÈME D'AMIS RÉEL ============
+
+async function loadRealFriends(userId){
+  try{
+    const res=await fetch(`${SUPABASE_URL}/rest/v1/friendships?or=(user_id.eq.${userId},friend_id.eq.${userId})&status=eq.accepted&select=user_id,friend_id`,{
+      headers:{'apikey':SUPABASE_ANON_KEY,'Authorization':`Bearer ${SUPABASE_ANON_KEY}`}});
+    const friendships=await res.json();
+    if(!Array.isArray(friendships)||friendships.length===0)return;
+    const fids=[...new Set(friendships.flatMap(f=>[f.user_id,f.friend_id]).filter(id=>id!==userId))];
+    if(fids.length===0)return;
+    const uRes=await fetch(`${SUPABASE_URL}/rest/v1/users?id=in.(${fids.join(',')})&select=id,firstname,lastname,username,profile_pic`,{
+      headers:{'apikey':SUPABASE_ANON_KEY,'Authorization':`Bearer ${SUPABASE_ANON_KEY}`}});
+    const users=await uRes.json();
+    const aRes=await fetch(`${SUPABASE_URL}/rest/v1/activities?user_id=in.(${fids.join(',')})&order=start_date.desc`,{
+      headers:{'apikey':SUPABASE_ANON_KEY,'Authorization':`Bearer ${SUPABASE_ANON_KEY}`}});
+    const activities=await aRes.json();
+    const SPORT_MAP={Run:'run',TrailRun:'trail',Walk:'walk',Hike:'hike',Ride:'ride',VirtualRide:'ride',GravelRide:'ride',Swim:'swim',WeightTraining:'workout',Workout:'workout',Crossfit:'workout'};
+    const COLS=['green','cyan','magenta','amber','pink','blue'];
+    users.forEach((u,i)=>{
+      const uid=String(u.id);
+      const ini=((u.firstname||'?')[0]+(u.lastname||'?')[0]).toUpperCase();
+      const col=COLS[i%COLS.length];
+      const a={id:uid,name:`${u.firstname||''} ${u.lastname||''}`.trim(),ini,col,seed:u.id%999,pf:{freq:.6,sp:['run'],vol:1,el:1,it:1}};
+      const acts=activities.filter(x=>x.user_id===u.id).map(x=>({
+        id:'real_'+x.id,ts:new Date(x.start_date).getTime(),date:new Date(x.start_date),
+        sport:SPORT_MAP[x.sport_type]||'workout',
+        dist:+((x.distance||0)/1000).toFixed(2),dur:x.moving_time||0,
+        speed:+((x.average_speed||0)*3.6).toFixed(1),maxSp:+((x.max_speed||0)*3.6).toFixed(1),
+        elev:Math.round(x.total_elevation_gain||0),cal:Math.round(x.calories||0),
+        hr:Math.round(x.average_heartrate||130),rseed:x.id%999999}));
+      DATA[uid]={a,acts};
+      if(!friendIds.includes(uid))friendIds.push(uid);
+    });
+  }catch(e){console.warn('Erreur chargement amis:',e);}
+}
+
+async function checkInviteLink(currentUserId){
+  const params=new URLSearchParams(window.location.search);
+  const inviterId=params.get('invite');
+  if(!inviterId||inviterId===String(currentUserId))return;
+  try{
+    await fetch(`${SUPABASE_URL}/rest/v1/friendships`,{method:'POST',
+      headers:{'apikey':SUPABASE_ANON_KEY,'Authorization':`Bearer ${SUPABASE_ANON_KEY}`,'Content-Type':'application/json','Prefer':'resolution=merge-duplicates'},
+      body:JSON.stringify([
+        {user_id:parseInt(inviterId),friend_id:currentUserId,status:'accepted'},
+        {user_id:currentUserId,friend_id:parseInt(inviterId),status:'accepted'}
+      ])});
+    window.history.replaceState({},'','/');
+    toast('Tu as rejoint le groupe de ton ami !');
+  }catch(e){console.warn('Erreur lien invitation:',e);}
+}
+
 function openInvite(){
   const sb=document.getElementById('sheet');
+  const user=JSON.parse(sessionStorage.getItem('rivalto_user')||'{}');
+  const inviteUrl=user.id?`https://rivalto52.netlify.app?invite=${user.id}`:'https://rivalto52.netlify.app';
   sb.innerHTML=`<div class="sheet"><div class="grip"></div>
-    <h3>Inviter un ami</h3><p class="s">Partage ton lien Rivalto ou cherche quelqu'un déjà inscrit.</p>
+    <h3>Inviter un ami</h3><p class="s">Partage ce lien. Ton ami se connecte avec Strava et rejoint automatiquement ton classement.</p>
     <div class="eyebrow" style="margin:0 0 10px"><span style="color:var(--green)">${ic('link',12,2)}</span> Ton lien d'invitation</div>
-    <div class="linkbox"><input id="invlink" value="rivalto.app/join/QL-7F3K" readonly>
+    <div class="linkbox"><input id="invlink" value="${inviteUrl}" readonly>
       <button onclick="copyLink()">${ic('copy',14,2)} Copier</button></div>
-    <p style="font-size:12px;color:var(--txt3)">Envoie-le par SMS, WhatsApp, Teams, mail… Ton ami se connecte avec Strava et rejoint ta liste.</p>
-    <div class="divider">ou</div>
-    <div class="eyebrow" style="margin:0 0 10px"><span style="color:var(--green)">${ic('search',12,2)}</span> Rechercher un athlète</div>
-    <div class="searchbox">${ic('search',18,2)}<input placeholder="Pseudo ou nom Strava…" oninput="filterSugg(this.value)"></div>
-    <div id="sugglist">${POOL.map(p=>suggRow(p)).join('')}</div><div style="height:6px"></div></div>`;
-  sb.classList.add('on');sb.onclick=e=>{if(e.target===sb)closeSheet();};
-}
-function suggRow(p){const added=friendIds.includes(p.id);
-  return `<div class="sugg" data-name="${p.name.toLowerCase()}"><div class="sa" style="color:${COL[p.col]};background:${COL[p.col]}1f">${p.ini}</div>
-    <div class="smid"><div class="sn">${p.name}</div><div class="ss">Athlète Strava</div></div>
-    <button class="addb ${added?'done':''}" id="add-${p.id}" onclick="addFriend('${p.id}')">${added?ic('check',14,2.5)+' Ajouté':ic('plus',14,2.5)+' Ajouter'}</button></div>`;
-}
-function filterSugg(q){q=q.toLowerCase();document.querySelectorAll('#sugglist .sugg').forEach(n=>{n.style.display=n.dataset.name.includes(q)?'flex':'none';});}
-function addFriend(pid){
-  if(friendIds.includes(pid))return;const p=POOL.find(x=>x.id===pid);const seed=900+POOL.indexOf(p)*17;
-  const a={id:pid,name:p.name,ini:p.ini,col:p.col,seed,pf:{freq:rr(mulberry32(seed),.4,.75),sp:['run','ride','trail','workout'],vol:rr(mulberry32(seed+1),.8,1.4),el:rr(mulberry32(seed+2),.6,1.6),it:rr(mulberry32(seed+3),.9,1.3)}};
-  DATA[pid]={a,acts:genAthlete(a)};friendIds.push(pid);
-  const btn=document.getElementById('add-'+pid);if(btn){btn.className='addb done';btn.innerHTML=ic('check',14,2.5)+' Ajouté';}
-  toast(`${p.name} a rejoint ton classement`);renderAmis();renderActivite();
-}
-function copyLink(){const v=document.getElementById('invlink').value;navigator.clipboard?.writeText(v).catch(()=>{});toast('Lien copié dans le presse-papier');}
+    <p style="font-size:12px;color:var(--txt3);margin-top:8px">Envoie-le par SMS, WhatsApp, Teams, mail… Ton ami clique, se connecte avec Strava, et apparaît dans ton classement.</p>
+    <div style="height:8px"></div></div>`;
+  sb.classList.add('on');sb.onclick=e=>{if(e.target===sb)closeSheet();};}
+
+function copyLink(){const v=document.getElementById('invlink').value;navigator.clipboard?.writeText(v).catch(()=>{});toast('Lien copié !');}
 function closeSheet(){const sb=document.getElementById('sheet');sb.classList.remove('on');setTimeout(()=>sb.innerHTML='',280);}
+
+function renderAmis(){
+  const from=startOf('semaine'),now=Date.now();
+  const friends=friendIds.map(id=>({a:getAthlete(id),ag:aggregate(DATA[id].acts,from,now,'all')}));
+  const ranked=['me',...friendIds].map(id=>({id,v:aggregate(DATA[id].acts,from,now,'all').km})).sort((a,b)=>b.v-a.v);
+  const rankOf=id=>ranked.findIndex(r=>r.id===id)+1;
+  const user=JSON.parse(sessionStorage.getItem('rivalto_user')||'{}');
+  document.getElementById('sc-amis').innerHTML=`
+    <div class="eyebrow">Mes amis · ${friends.length}</div>
+    <div style="padding:0 4px">
+    ${friends.length?friends.map(f=>`<div class="frow" onclick="openFriend('${f.a.id}')">${avatar(f.a,'fa')}
+      <div class="fmid"><div class="fn">${f.a.name}</div><div class="fs">${f.ag.km} km · ${f.ag.sessions} séance${f.ag.sessions>1?'s':''} cette semaine</div></div>
+      <div class="fb">#${rankOf(f.a.id)}</div></div>`).join('')
+    :`<div class="empty">${ic('users',38,1.5)}Pas encore d'amis.<br>Invite-les pour lancer le challenge !</div>`}
+    </div>
+    <div style="padding:0 4px"><button class="btn-out" onclick="openInvite()">${ic('userplus',19,2)} Inviter un ami</button></div>`;}
 
 /* ---------- toast ---------- */
 let toastT;
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('on');clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('on'),2200);}
 
 /* ============================================================ PWA */
+
 function appIcon(){
   const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><rect width="512" height="512" rx="110" fill="#08090c"/><circle cx="256" cy="256" r="150" fill="none" stroke="#00ff95" stroke-width="14"/><path d="M278 130 196 286h70l-14 96 118-160h-86l16-92z" fill="#00ff95"/></svg>`;
   return 'data:image/svg+xml;base64,'+btoa(svg);
