@@ -497,6 +497,8 @@ function avatar(a,cls){return `<div class="${cls}" style="color:${COL[a.col]};ba
 const STRAVA_CLIENT_ID='260807';
 const STRAVA_REDIRECT_URI='https://rivalto52.netlify.app/callback';
 const STRAVA_SCOPE='read,activity:read';
+const SUPABASE_URL='https://vyhewuonuytxoyaykpth.supabase.co';
+const SUPABASE_ANON_KEY='sb_publishable_PEgP6snUc770lzkzSI5iSA_g7o8GGHl';
 
 function renderLogin(){
   const params=new URLSearchParams(window.location.search);
@@ -528,11 +530,43 @@ async function handleOAuthCallback(code){
     const user=await res.json();
     if(user.error)throw new Error(user.error);
     sessionStorage.setItem('rivalto_user',JSON.stringify(user));
+    // Sync activités
+    document.querySelector('.pitch').textContent='Synchronisation de tes activités…';
     await fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user_id:user.id})});
-    buildData();mountApp(user);
+    // Charger les vraies activités depuis Supabase
+    buildData();
+    await loadRealActivities(user.id);
+    mountApp(user);
   }catch(e){
     document.getElementById('app').innerHTML=`<div class="login"><div class="ring"><span style="color:var(--magenta)">${ic('bolt',46,0,true)}</span></div><div class="brand">RIVAL<b>TO</b></div><p class="pitch" style="color:var(--magenta)">Erreur : ${e.message}</p><button class="btn-strava" onclick="renderLogin()">${ic('bolt',20,0,true)} Réessayer</button></div>`;
   }
+}
+
+// Charge les vraies activités Strava depuis Supabase et remplace les données "moi"
+async function loadRealActivities(userId){
+  try{
+    const res=await fetch(`${SUPABASE_URL}/rest/v1/activities?user_id=eq.${userId}&order=start_date.desc&limit=100`,{
+      headers:{'apikey':SUPABASE_ANON_KEY,'Authorization':`Bearer ${SUPABASE_ANON_KEY}`}});
+    const acts=await res.json();
+    if(!Array.isArray(acts)||acts.length===0)return;
+    // Convertir format Supabase → format Rivalto
+    const SPORT_MAP={Run:'run',TrailRun:'trail',Walk:'walk',Hike:'hike',Ride:'ride',VirtualRide:'ride',
+      GravelRide:'ride',Swim:'swim',WeightTraining:'workout',Workout:'workout',Crossfit:'workout'};
+    const converted=acts.map(a=>({
+      id:'real_'+a.id,ts:new Date(a.start_date).getTime(),date:new Date(a.start_date),
+      sport:SPORT_MAP[a.sport_type]||'workout',
+      dist:+(( a.distance||0)/1000).toFixed(2),
+      dur:a.moving_time||0,speed:+((a.average_speed||0)*3.6).toFixed(1),
+      maxSp:+((a.max_speed||0)*3.6).toFixed(1),
+      elev:Math.round(a.total_elevation_gain||0),
+      cal:Math.round(a.calories||0),
+      hr:Math.round(a.average_heartrate||130),
+      rseed:a.id%999999
+    }));
+    // Remplacer les activités fictives de "moi" par les vraies
+    DATA.me.acts=converted;
+    state.isRealUser=true;
+  }catch(e){console.warn('Erreur chargement activités réelles:',e);}
 }
 
 function loginDemo(){buildData();mountApp(null);}
