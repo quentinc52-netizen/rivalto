@@ -5,7 +5,7 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY;
 
 const headers = {
-  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Origin": "https://rivalto52.netlify.app",
   "Access-Control-Allow-Headers": "Content-Type",
   "Content-Type": "application/json"
 };
@@ -61,8 +61,17 @@ exports.handler = async (event) => {
   if (event.httpMethod === "OPTIONS") return { statusCode: 200, headers, body: "" };
 
   try {
-    const { user_id } = JSON.parse(event.body || "{}");
+    const { user_id, session_token } = JSON.parse(event.body || "{}");
     if (!user_id) return { statusCode: 400, headers, body: JSON.stringify({ error: "user_id manquant" }) };
+
+    // Vérifier que le session_token correspond à ce user_id
+    if (session_token) {
+      const decoded = Buffer.from(session_token, "base64").toString("utf8");
+      const tokenUserId = decoded.split(":")[0];
+      if (String(tokenUserId) !== String(user_id)) {
+        return { statusCode: 403, headers, body: JSON.stringify({ error: "Non autorisé" }) };
+      }
+    }
 
     // Récupérer l'utilisateur et son token
     const user = await getUser(user_id);
