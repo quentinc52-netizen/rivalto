@@ -472,7 +472,7 @@ const MSG={
 };
 
 /* ============================================================ STATE */
-let DATA={};let friendIds=['t','s','j','m','l','k'];
+let DATA={};let friendIds=[];
 const state={tab:'classement',myPeriod:'semaine',
   rankCrit:'effort',rankPeriod:'semaine',rankSport:'all',rankSel:'all',prevRankOrder:{}};
 const CRITS=[
@@ -489,7 +489,19 @@ const CRITS=[
 ];
 const SPORT_FILTERS=[{id:'all',l:'Tous les sports'},{id:'run',l:'Course à pied'},{id:'ride',l:'Vélo'},{id:'swim',l:'Natation'},{id:'trail',l:'Trail'},{id:'hike',l:'Randonnée'},{id:'workout',l:'Musculation'}];
 
-function buildData(){DATA={};for(const a of ATHLETES)DATA[a.id]={a,acts:genAthlete(a)};}
+function buildData(){
+  DATA={};
+  // Générer uniquement les données de "moi" (les amis fictifs sont supprimés)
+  const me=ATHLETES[0];
+  DATA[me.id]={a:me,acts:genAthlete(me)};
+  // En mode démo uniquement, ajouter les amis fictifs
+  if(!sessionStorage.getItem('rivalto_user')){
+    friendIds=['t','s','j','m','l','k'];
+    for(const a of ATHLETES.slice(1))DATA[a.id]={a,acts:genAthlete(a)};
+  }else{
+    friendIds=[];
+  }
+}
 function getAthlete(id){return DATA[id].a;}
 function avatar(a,cls){return `<div class="${cls}" style="color:${COL[a.col]};background:${COL[a.col]}1f">${a.ini}</div>`;}
 
@@ -538,9 +550,6 @@ async function handleOAuthCallback(code){
     await checkInviteLink(user.id);
     await loadRealActivities(user.id);
     await loadRealFriends(user.id);
-    // Vider les amis fictifs si on a de vrais amis
-    if(friendIds.some(id=>id!=='t'&&id!=='s'&&id!=='j'&&id!=='m'&&id!=='l'&&id!=='k')){
-      friendIds=friendIds.filter(id=>!['t','s','j','m','l','k'].includes(id));}
     mountApp(user);
   }catch(e){
     document.getElementById('app').innerHTML=`<div class="login"><div class="ring"><span style="color:var(--magenta)">${ic('bolt',46,0,true)}</span></div><div class="brand">RIVAL<b>TO</b></div><p class="pitch" style="color:var(--magenta)">Erreur : ${e.message}</p><button class="btn-strava" onclick="renderLogin()">${ic('bolt',20,0,true)} Réessayer</button></div>`;
